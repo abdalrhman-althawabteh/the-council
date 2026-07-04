@@ -1,0 +1,9 @@
+{
+  "$comment": "03:00 UTC = 06:00 Asia/Amman (UTC+3). Vercel Hobby crons are daily-only; to change the firing time, edit this schedule and redeploy.",
+  "crons": [
+    {
+      "path": "/api/research",
+      "schedule": "0 3 * * *"
+    }
+  ]
+}
