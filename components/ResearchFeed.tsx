@@ -3,19 +3,17 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import type { CompetitorVideo, CommentInsight } from "@/lib/types";
+import type { CompetitorVideo } from "@/lib/types";
 import { useI18n } from "@/lib/i18n";
 
 export function ResearchFeed({
-  videos,
-  insights,
+  tracked,
+  market,
 }: {
-  videos: CompetitorVideo[];
-  insights: CommentInsight[];
+  tracked: CompetitorVideo[];
+  market: CompetitorVideo[];
 }) {
   const { t } = useI18n();
-  const tracked = videos.filter((v) => v.segment === "tracked");
-  const market = videos.filter((v) => v.segment !== "tracked");
 
   return (
     <div className="py-6">
@@ -28,13 +26,12 @@ export function ResearchFeed({
         <RunNow />
       </header>
 
-      {videos.length === 0 && insights.length === 0 ? (
+      {tracked.length === 0 && market.length === 0 ? (
         <div className="card p-10 text-center text-sm font-medium text-muted">
           {t("research.empty")}
         </div>
       ) : (
         <div className="grid gap-10">
-          <CommentSection insights={insights} />
           <VideoSection
             title={t("research.tracked")}
             sub={t("research.tracked.sub")}
@@ -63,10 +60,9 @@ function RunNow() {
     setBusy(true);
     setNote(null);
     try {
-      // videos first, then his channel stats + comment themes
       const r1 = await fetch("/api/research", { method: "POST" });
       if (!r1.ok) throw new Error((await r1.json().catch(() => ({})))?.error ?? `research ${r1.status}`);
-      await fetch("/api/analytics/sync", { method: "POST" }); // comments; non-fatal
+      await fetch("/api/analytics/sync", { method: "POST" }); // channel + comments; non-fatal
       router.refresh();
     } catch (e) {
       setNote(`${lang === "ar" ? "فشل" : "Failed"}: ${(e as Error).message}`);
@@ -81,51 +77,6 @@ function RunNow() {
         {busy ? t("research.running") : t("research.run")} 🔭
       </button>
       {note && <span className="text-xs font-semibold text-red-600">{note}</span>}
-    </div>
-  );
-}
-
-function CommentSection({ insights }: { insights: CommentInsight[] }) {
-  const { t } = useI18n();
-  if (insights.length === 0) return null;
-  return (
-    <section>
-      <div className="mb-3 flex items-center gap-3">
-        <h2 className="text-xl font-extrabold">🗣️ {t("research.comments")}</h2>
-        <span className="chip border border-violet-200 bg-violet-50 text-violet-700">
-          {insights.length}
-        </span>
-        <span className="hidden text-xs font-medium text-muted sm:inline">
-          {t("research.comments.sub")}
-        </span>
-      </div>
-      <div className="grid gap-3 sm:grid-cols-2">
-        {insights.map((i) => (
-          <CommentCard key={i.id} i={i} />
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function CommentCard({ i }: { i: CommentInsight }) {
-  const { t, lang } = useI18n();
-  return (
-    <div className="card flex flex-col gap-1.5 p-4">
-      <div className="flex items-start justify-between gap-2">
-        <h3 className="text-sm font-bold">💡 {i.theme}</h3>
-        <span className="chip shrink-0 border border-violet-200 bg-violet-50 text-violet-700">
-          {lang === "ar" ? "الطلب" : "demand"} {i.weight}
-        </span>
-      </div>
-      <p className="text-xs font-medium text-muted">{i.summary}</p>
-      {i.sample && <p className="text-xs italic text-muted/80">“{i.sample}”</p>}
-      <Link
-        href={`/council?topic=${encodeURIComponent(i.theme)}`}
-        className="mt-1 self-start text-xs font-bold text-accent-dark hover:underline"
-      >
-        {t("research.send")} →
-      </Link>
     </div>
   );
 }

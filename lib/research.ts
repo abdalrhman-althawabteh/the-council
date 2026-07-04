@@ -1,8 +1,7 @@
 import { db, hasDb } from "./supabase";
-import { search, statsFor, channelIdFromHandle, channelUploads } from "./youtube";
+import { search, statsFor, channelIdFromHandle, channelUploads, type YtVideo } from "./youtube";
 
-// Niche queries the scout sweeps. Tracked competitors from settings are searched
-// per-channel (their latest uploads) and tagged 'tracked'.
+// Market queries the scout sweeps across all of YouTube (non-competitor discovery).
 const NICHE_QUERIES = [
   "build a business with Claude Code",
   "Claude Code tutorial for startups",
@@ -12,12 +11,30 @@ const NICHE_QUERIES = [
   "AI coding agent side hustle",
 ];
 
+// Relevance gate — a video only counts if its title looks like Abood's niche
+// (build a business with AI / Claude Code). Keeps competitor dumps on-topic.
+const NICHE_RE =
+  /\b(claude|gpt|llm|ai|a\.i|agent|agentic|automation|automate|n8n|make\.com|zapier|saas|startup|business|entrepreneur|revenue|profit|monet|gemini|antigravity|cursor|windsurf|replit|bolt|lovable|copilot|openai|anthropic|deepseek|grok|no.?code|workflow|chatbot|mcp|rag|opal|firebase|prompt|vibe.?cod|coding|code|build|app|api|tool)\b/i;
+
+const PER_CHANNEL = 6; // most-recent relevant videos to keep per competitor
+
 export interface ResearchResult {
   found: number;
   tracked: number;
   market: number;
   competitors: number;
 }
+
+const mapVideo = (v: YtVideo) => ({
+  video_id: v.video_id,
+  title: v.title,
+  channel_title: v.channel_title,
+  channel_id: v.channel_id,
+  url: v.url,
+  thumbnail: v.thumbnail,
+  views: v.views ?? 0,
+  published_at: v.published_at,
+});
 
 /** Sweep competitor + niche videos into competitor_videos. Used by cron + manual trigger. */
 export async function runResearch(): Promise<ResearchResult> {
@@ -34,13 +51,10 @@ export async function runResearch(): Promise<ResearchResult> {
       .single();
     const competitors = ((settings?.competitors as string[]) ?? []).filter(Boolean);
 
-    // Collect unique video ids with query + segment. Tracked first so it wins
-    // the segment when a video also shows up in market search.
-    const byId = new Map<string, { query: string; segment: "tracked" | "market" }>();
-
-    // Tracked competitors: newest uploads via each channel's uploads playlist
-    // (reliable + cheap; the Search API with an empty query silently dropped
-    // most channels).
+    // Tracked candidates: each competitor's recent uploads, newest-first, kept
+    // per-competitor so we can relevance-filter and cap each channel.
+    const trackedByComp = new Map<string, string[]>();
+    const trackedIds = new Set<string>();
     for (const c of competitors) {
       try {
         const chId = await channelIdFromHandle(c);
@@ -48,44 +62,59 @@ export async function runResearch(): Promise<ResearchResult> {
           console.warn("[research] could not resolve competitor:", c);
           continue;
         }
-        for (const vid of await channelUploads(chId, 15)) {
-          if (!byId.has(vid)) byId.set(vid, { query: c, segment: "tracked" });
-        }
+        const ids = await channelUploads(chId, 25);
+        trackedByComp.set(c, ids);
+        ids.forEach((id) => trackedIds.add(id));
       } catch (e) {
         console.warn("[research] competitor failed:", c, (e as Error).message);
       }
     }
 
+    // Market candidates: niche keyword search (already relevance-ranked).
+    const marketMeta = new Map<string, string>(); // videoId -> query
     for (const q of NICHE_QUERIES) {
       try {
         for (const v of await search(q, 8)) {
-          if (!byId.has(v.video_id)) byId.set(v.video_id, { query: q, segment: "market" });
+          if (!trackedIds.has(v.video_id) && !marketMeta.has(v.video_id)) {
+            marketMeta.set(v.video_id, q);
+          }
         }
       } catch (e) {
         console.warn("[research] query failed:", q, (e as Error).message);
       }
     }
 
-    const ids = [...byId.keys()];
+    // Fetch stats (titles/views) for every candidate.
+    const allIds = [...new Set([...trackedIds, ...marketMeta.keys()])];
+    const stats: Record<string, YtVideo> = {};
+    for (let i = 0; i < allIds.length; i += 50) {
+      Object.assign(stats, await statsFor(allIds.slice(i, i + 50)));
+    }
+
     const rows: any[] = [];
-    for (let i = 0; i < ids.length; i += 50) {
-      const stats = await statsFor(ids.slice(i, i + 50));
-      for (const v of Object.values(stats)) {
-        const meta = byId.get(v.video_id);
-        rows.push({
-          video_id: v.video_id,
-          title: v.title,
-          channel_title: v.channel_title,
-          channel_id: v.channel_id,
-          url: v.url,
-          thumbnail: v.thumbnail,
-          views: v.views ?? 0,
-          published_at: v.published_at,
-          query: meta?.query,
-          segment: meta?.segment ?? "market",
-        });
+
+    // Tracked: per competitor, newest-first, niche-relevant only, capped.
+    for (const [c, ids] of trackedByComp) {
+      let kept = 0;
+      for (const id of ids) {
+        if (kept >= PER_CHANNEL) break;
+        const v = stats[id];
+        if (!v || !NICHE_RE.test(v.title)) continue;
+        rows.push({ ...mapVideo(v), query: c, segment: "tracked" });
+        kept++;
       }
     }
+
+    // Market: keep the niche-search hits (already on-topic).
+    for (const [id, q] of marketMeta) {
+      const v = stats[id];
+      if (!v) continue;
+      rows.push({ ...mapVideo(v), query: q, segment: "market" });
+    }
+
+    // Fresh snapshot each run — clear the previous sweep so old/over-dumped rows
+    // don't linger. (Saved ideas keep their own source_ref, so this is safe.)
+    await db().from("competitor_videos").delete().not("id", "is", null);
     if (rows.length) {
       await db().from("competitor_videos").upsert(rows, { onConflict: "video_id" });
     }

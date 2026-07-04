@@ -1,19 +1,20 @@
 import { db, hasDb } from "@/lib/supabase";
 import { ResearchFeed } from "@/components/ResearchFeed";
-import type { CompetitorVideo, CommentInsight } from "@/lib/types";
+import type { CompetitorVideo } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
 export default async function ResearchPage() {
-  let videos: CompetitorVideo[] = [];
-  let insights: CommentInsight[] = [];
+  let tracked: CompetitorVideo[] = [];
+  let market: CompetitorVideo[] = [];
   if (hasDb()) {
-    const [{ data: v }, { data: i }] = await Promise.all([
-      db().from("competitor_videos").select("*").order("found_at", { ascending: false }).limit(40),
-      db().from("comment_insights").select("*").order("weight", { ascending: false }).limit(12),
+    // fetch each segment separately so neither gets truncated by the other
+    const [{ data: t }, { data: m }] = await Promise.all([
+      db().from("competitor_videos").select("*").eq("segment", "tracked").order("published_at", { ascending: false }).limit(60),
+      db().from("competitor_videos").select("*").eq("segment", "market").order("views", { ascending: false }).limit(40),
     ]);
-    videos = (v as CompetitorVideo[]) ?? [];
-    insights = (i as CommentInsight[]) ?? [];
+    tracked = (t as CompetitorVideo[]) ?? [];
+    market = (m as CompetitorVideo[]) ?? [];
   }
-  return <ResearchFeed videos={videos} insights={insights} />;
+  return <ResearchFeed tracked={tracked} market={market} />;
 }
