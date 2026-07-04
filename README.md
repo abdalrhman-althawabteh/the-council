@@ -56,6 +56,7 @@ Push to a repo, import into Vercel, add all env vars, and set a `CRON_SECRET`
 See `.env.example`. All keys are server-side only.
 
 ## Notes
+- Daily research cron fires at **03:00 UTC = 06:00 Asia/Amman (UTC+3)** (`vercel.json`). Vercel Hobby crons are daily-only; to change the time, edit the schedule and redeploy.
 - Without Supabase/keys configured, the UI still renders (empty states) — nothing crashes.
 - Comments are stored as **summarized themes**, not raw rows.
 - Council debate is fixed at **2 rounds** (`ROUNDS` in `lib/council.ts`).
